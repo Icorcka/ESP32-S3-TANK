@@ -9,6 +9,8 @@
 #include "feedback/ModeLogger.h"
 #include "feedback/StatusLed.h"
 #include "input/PushButton.h"
+#include "input/WebRemote.h"
+#include "net/WifiAccessPoint.h"
 #include "services/Cannon.h"
 #include "services/DriveSystem.h"
 #include "services/TankController.h"
@@ -32,6 +34,8 @@ TankController controller(tankLogic, config::kController);
 ModeLogger modeLogger;
 StatusLed statusLed(board::kStatusLedPin);
 
+WifiAccessPoint wifi(config::kWifi);
+WebRemote webRemote(controller, config::kWebRemote, config::kGamepadMapping);
 PushButton bootButton(board::kButtonPin, controller,
                       Command::toggleEmergencyStop(CommandSource::Button),  // short press
                       Command::toggleDemo(CommandSource::Button),           // long press
@@ -54,6 +58,7 @@ extern "C" void app_main() {
   rightMotor.begin();
 
   tankLogic.addObserver(modeLogger);
+  tankLogic.addObserver(webRemote);
   if (statusLed.begin()) {
     tankLogic.addObserver(statusLed);
   }
@@ -69,5 +74,10 @@ extern "C" void app_main() {
   }
   if (!bootButton.begin()) {
     halt("button");
+  }
+
+  wifi.begin();
+  if (!webRemote.begin()) {
+    halt("web remote");
   }
 }

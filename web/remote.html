@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Пульт танка</title>
+<style>
+  :root {
+    --bg: #0f1216;
+    --panel: #181c22;
+    --line: #29303a;
+    --text: #e9edf2;
+    --muted: #8a94a3;
+    --ok: #34c77b;
+    --warn: #f2a93b;
+    --bad: #ef5350;
+    --accent: #4d8dff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+  h1 { margin: 4px 0; font-size: 22px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .label, .caption { color: var(--muted); font-size: 13px; }
+  .caption { text-align: center; margin-top: 6px; }
+  .value { font-size: 18px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  [data-tone="ok"] { color: var(--ok); }
+  [data-tone="warn"] { color: var(--warn); }
+  [data-tone="bad"] { color: var(--bad); }
+  [data-tone="muted"] { color: var(--muted); }
+  #hint { color: var(--muted); }
+  #hint b { color: var(--text); font-weight: 600; }
+  .pad { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; }
+  .stick { width: 112px; aspect-ratio: 1; margin: 0 auto; border: 2px solid var(--line); border-radius: 50%; position: relative; }
+  .stick span {
+    position: absolute; left: 50%; top: 50%;
+    width: 24px; height: 24px; margin: -12px 0 0 -12px;
+    border-radius: 50%; background: var(--accent);
+  }
+  .middle { display: grid; gap: 12px; justify-items: center; }
+  .trigger { width: 128px; }
+  .bar { height: 8px; margin-top: 4px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .bar span { display: block; width: 0; height: 100%; background: var(--warn); }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: 220px; }
+  .chip { padding: 3px 10px; border-radius: 999px; background: var(--line); color: var(--muted); font-size: 14px; }
+  .chip[data-on="1"] { background: var(--accent); color: #fff; }
+  #estop {
+    width: 100%; padding: 18px; border: 0; border-radius: 14px;
+    background: var(--bad); color: #fff; font-size: 20px; font-weight: 700; cursor: pointer;
+  }
+  #estop:disabled { opacity: .4; cursor: default; }
+  .address { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .address input {
+    flex: 1; min-width: 140px; padding: 10px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg); color: var(--text); font-size: 16px;
+  }
+  .address button { padding: 10px 16px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; }
+  @media (max-width: 520px) {
+    .value { font-size: 15px; }
+    .stick { width: 84px; }
+    .pad { gap: 8px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Пульт танка</h1>
+
+  <section class="panel tiles" aria-live="polite">
+    <div><div class="label">Танк</div><div class="value" id="link" data-tone="muted">—</div></div>
+    <div><div class="label">Геймпад</div><div class="value" id="pad" data-tone="muted">—</div></div>
+    <div>
+      <div class="label">Режим · передача</div>
+      <div class="value"><span id="mode" data-tone="muted">—</span> · <span id="gear">—</span></div>
+    </div>
+  </section>
+
+  <section class="panel" id="hint"></section>
+
+  <section class="panel pad">
+    <div><div class="stick"><span id="leftDot"></span></div><div class="caption">газ</div></div>
+    <div class="middle">
+      <div class="trigger"><div class="caption">R2 — постріл</div><div class="bar"><span id="r2Bar"></span></div></div>
+      <div class="chips">
+        <span class="chip" id="chipCross">✕ постріл</span>
+        <span class="chip" id="chipCircle">○ E-STOP</span>
+        <span class="chip" id="chipOptions">OPTIONS демо</span>
+        <span class="chip" id="chipL1">L1</span>
+        <span class="chip" id="chipR1">R1</span>
+      </div>
+    </div>
+    <div><div class="stick"><span id="rightDot"></span></div><div class="caption">поворот</div></div>
+  </section>
+
+  <button id="estop" type="button" disabled>E-STOP</button>
+
+  <section class="panel address">
+    <label class="label" for="host">Адреса танка</label>
+    <input id="host" inputmode="decimal" autocomplete="off" spellcheck="false">
+    <button id="connect" type="button">Підключитися</button>
+  </section>
+</main>
+<script>
+'use strict';
+
+// ── Має збігатися з прошивкою ─────────────────────────────────────────────
+const WS_PATH = '/ws';               // WebSocket на тому ж порту, що й сторінка (src/input/WebRemote.cpp)
+const DEFAULT_HOST = '192.168.4.1';  // адреса ESP32 у власній Wi-Fi мережі
+const SEND_PERIOD_MS = 33;           // ~30 кадрів/с (failsafe танка — 0.5 с)
+const RECONNECT_MS = 2000;
+// Біти кнопок — як tank::remote::ButtonBit у lib/TankCore/src/RemoteProtocol.h
+const BIT = { cross: 1, circle: 2, options: 4, l1: 8, r1: 16 };
+// Індекси кнопок у стандартній розкладці Gamepad API ("standard gamepad")
+const PAD = { cross: 0, circle: 1, l1: 4, r1: 5, r2: 7, options: 9 };
+
+const HINTS = {
+  noLink: 'Підключіть цей пристрій до <b>Wi-Fi мережі танка</b> — зв’язок відновиться сам. ' +
+          'Адреса танка в його мережі — <b>192.168.4.1</b>.',
+  noPad: 'Під’єднайте <b>DualSense</b> до цього пристрою по Bluetooth (затисніть <b>Create + PS</b>, ' +
+         'доки не заблимає підсвітка), а потім натисніть будь-яку кнопку на геймпаді.',
+  ready: '<b>Лівий стік</b> — газ, <b>правий</b> — поворот, <b>R2 / ✕</b> — постріл, <b>○</b> — E-STOP, ' +
+         '<b>OPTIONS</b> — демо, <b>L1 / R1</b> — передача. Не перемикайте вкладку: танк зупиниться.',
+};
+const INSECURE_NOTE = ' Якщо геймпад так і не з’явиться, відкрийте файл <b>web/remote.html</b> ' +
+                      'прямо з комп’ютера (подвійний клік).';
+
+const $ = (id) => document.getElementById(id);
+const ui = {
+  link: $('link'), pad: $('pad'), mode: $('mode'), gear: $('gear'), hint: $('hint'),
+  leftDot: $('leftDot'), rightDot: $('rightDot'), r2Bar: $('r2Bar'),
+  estop: $('estop'), host: $('host'), connect: $('connect'),
+  chips: { cross: $('chipCross'), circle: $('chipCircle'), options: $('chipOptions'), l1: $('chipL1'), r1: $('chipR1') },
+};
+
+let socket = null;
+let reconnectTimer = 0;
+let shownHint = '';
+
+function setTile(element, text, tone) {
+  if (element.textContent !== text) element.textContent = text;
+  element.dataset.tone = tone;
+}
+
+function showHint(key) {
+  if (key === shownHint) return;
+  shownHint = key;
+  ui.hint.innerHTML = HINTS[key] + (key === 'noPad' && !window.isSecureContext ? INSECURE_NOTE : '');
+}
+
+// ── Зв'язок з танком ──────────────────────────────────────────────────────
+function connect() {
+  clearTimeout(reconnectTimer);
+  if (socket) {
+    socket.onclose = null;
+    socket.close();
+  }
+  const host = ui.host.value.trim() || DEFAULT_HOST;
+  setTile(ui.link, 'підключення…', 'warn');
+  socket = new WebSocket(`ws://${host}${WS_PATH}`);
+  socket.onopen = () => setTile(ui.link, 'на зв’язку', 'ok');
+  socket.onmessage = (event) => showStatus(String(event.data));
+  socket.onclose = () => {
+    setTile(ui.link, 'немає зв’язку', 'bad');
+    setTile(ui.mode, '—', 'muted');
+    reconnectTimer = setTimeout(connect, RECONNECT_MS);
+  };
+}
+
+function isOnline() {
+  return socket !== null && socket.readyState === WebSocket.OPEN;
+}
+
+// Кадр від танка: "T,<режим>,<передача>"
+function showStatus(frame) {
+  const [kind, mode, gear] = frame.split(',');
+  if (kind !== 'T') return;
+  const tone = mode === 'E-STOP' ? 'bad' : mode === 'DEMO' ? 'warn' : 'ok';
+  setTile(ui.mode, mode, tone);
+  ui.gear.textContent = gear;
+  ui.estop.textContent = mode === 'E-STOP' ? 'Зняти E-STOP' : 'E-STOP';
+}
+
+// ── Геймпад ───────────────────────────────────────────────────────────────
+function firstGamepad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const pad of pads) {
+    if (pad && pad.connected) return pad;
+  }
+  return null;
+}
+
+function readState(pad) {
+  const pressed = (index) => Boolean(pad.buttons[index] && pad.buttons[index].pressed);
+  const axis = (index) => (Number.isFinite(pad.axes[index]) ? pad.axes[index] : 0);
+  let buttons = 0;
+  if (pressed(PAD.cross)) buttons |= BIT.cross;
+  if (pressed(PAD.circle)) buttons |= BIT.circle;
+  if (pressed(PAD.options)) buttons |= BIT.options;
+  if (pressed(PAD.l1)) buttons |= BIT.l1;
+  if (pressed(PAD.r1)) buttons |= BIT.r1;
+  return {
+    leftY: -axis(1),  // у Gamepad API "від себе" = −1, а в танку "вперед" = +1
+    rightX: axis(2),
+    r2: pad.buttons[PAD.r2] ? pad.buttons[PAD.r2].value : 0,
+    buttons,
+    axes: [axis(0), axis(1), axis(2), axis(3)],
+  };
+}
+
+function moveDot(dot, x, y) {
+  dot.style.left = `${50 + x * 38}%`;
+  dot.style.top = `${50 + y * 38}%`;
+}
+
+function render(state) {
+  moveDot(ui.leftDot, state.axes[0], state.axes[1]);
+  moveDot(ui.rightDot, state.axes[2], state.axes[3]);
+  ui.r2Bar.style.width = `${Math.round(state.r2 * 100)}%`;
+  for (const [name, chip] of Object.entries(ui.chips)) {
+    chip.dataset.on = state.buttons & BIT[name] ? '1' : '0';
+  }
+}
+
+function tick() {
+  const online = isOnline();
+  const pad = firstGamepad();
+  ui.estop.disabled = !online;
+  showHint(!online ? 'noLink' : pad ? 'ready' : 'noPad');
+
+  if (!pad) {
+    setTile(ui.pad, 'немає', 'bad');
+    return;
+  }
+  const name = pad.id.includes('DualSense') ? 'DualSense' : 'геймпад';
+  const standard = pad.mapping === 'standard';
+  setTile(ui.pad, standard ? name : `${name} (?)`, standard ? 'ok' : 'warn');
+
+  const state = readState(pad);
+  render(state);
+  // Прихована вкладка нічого не шле — і танк зупиниться сам (failsafe).
+  if (online && !document.hidden) {
+    socket.send(`S,${state.leftY.toFixed(3)},${state.rightX.toFixed(3)},${state.r2.toFixed(3)},${state.buttons}`);
+  }
+}
+
+ui.estop.addEventListener('click', () => {
+  if (isOnline()) socket.send('E');
+});
+ui.connect.addEventListener('click', connect);
+
+ui.host.value = location.host || DEFAULT_HOST;  // з диска (file://) адреси немає
+connect();
+setInterval(tick, SEND_PERIOD_MS);
+</script>
+</body>
+</html>
+

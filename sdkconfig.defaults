@@ -5,6 +5,9 @@
 # 1 ms FreeRTOS tick instead of 10 ms — precise timing for the drive loop, debounce and firing
 CONFIG_FREERTOS_HZ=1000
 
+# WebSocket in the built-in HTTP server — for the browser remote
+CONFIG_HTTPD_WS_SUPPORT=y
+
 # Larger app partition (1.5 MB): the Wi-Fi stack takes a lot of space.
 # Must match board_build.partitions in platformio.ini
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
