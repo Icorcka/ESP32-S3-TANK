@@ -8,9 +8,13 @@
 #include "drivers/Motor.h"
 #include "feedback/ModeLogger.h"
 #include "feedback/StatusLed.h"
+#include "input/PushButton.h"
 #include "services/Cannon.h"
 #include "services/DriveSystem.h"
 #include "services/TankController.h"
+
+using tank::Command;
+using tank::CommandSource;
 
 namespace {
 
@@ -27,6 +31,11 @@ TankController controller(tankLogic, config::kController);
 
 ModeLogger modeLogger;
 StatusLed statusLed(board::kStatusLedPin);
+
+PushButton bootButton(board::kButtonPin, controller,
+                      Command::toggleEmergencyStop(CommandSource::Button),  // short press
+                      Command::toggleDemo(CommandSource::Button),           // long press
+                      config::kButton);
 
 [[noreturn]] void halt(const char* component) {
   ESP_LOGE(kTag, "Failed to start: %s. Halting.", component);
@@ -57,5 +66,8 @@ extern "C" void app_main() {
   }
   if (!controller.start(config::kControllerTask, config::kInitialMode)) {
     halt("controller");
+  }
+  if (!bootButton.begin()) {
+    halt("button");
   }
 }

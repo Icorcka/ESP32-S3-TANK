@@ -3,6 +3,7 @@
 #include <TankStateMachine.h>
 
 #include "drivers/Motor.h"
+#include "input/PushButton.h"
 #include "services/Cannon.h"
 #include "services/DriveSystem.h"
 #include "services/TankController.h"
@@ -41,6 +42,11 @@ constexpr tank::TankMode kInitialMode = tank::TankMode::Manual;
 constexpr TankController::Settings kController{
     .queueLength = 16,
     .tickPeriodMs = 50,
+};
+
+constexpr PushButton::Settings kButton{
+    .debounceMs = 30,
+    .longPressMs = 800,
 };
 
 constexpr BaseType_t kAppCore = 1;
