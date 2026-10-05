@@ -9,6 +9,7 @@ built with **PlatformIO**.
 ```bash
 pio run -t upload        # build and flash the ESP32-S3
 pio device monitor       # debug log (115200)
+pio test -e native       # logic unit tests on the computer
 pio run -t menuconfig    # (optional) all ESP-IDF settings
 ```
 
