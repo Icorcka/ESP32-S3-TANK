@@ -2,10 +2,13 @@
 //   pio test -e native
 
 #include <DriveMath.h>
+#include <GamepadMapper.h>
+#include <RemoteProtocol.h>
 #include <TankStateMachine.h>
 #include <unity.h>
 
 #include <cmath>
+#include <cstring>
 
 using namespace tank;
 
@@ -67,6 +70,32 @@ Command driveCommand(float left, float right) {
   return Command::drive(CommandSource::Web, {left, right});
 }
 
+struct RecordingSink : ICommandSink {
+  static constexpr size_t kCapacity = 16;
+  Command commands[kCapacity] = {};
+  size_t count = 0;
+
+  bool post(const Command& command) override {
+    if (count < kCapacity) {
+      commands[count++] = command;
+    }
+    return true;
+  }
+
+  size_t countOf(CommandType type) const {
+    size_t matches = 0;
+    for (size_t i = 0; i < count; ++i) {
+      matches += commands[i].type == type ? 1 : 0;
+    }
+    return matches;
+  }
+
+  const Command& last() const { return commands[count - 1]; }
+};
+
+// Deadzone 0.1, R2 fires from 0.5, gears 40/70/100 %, starts in the second.
+constexpr GamepadMapper::Settings kMapping{0.1f, 0.5f, {0.4f, 0.7f, 1.0f}, 1};
+
 }  // namespace
 
 void setUp() {}
@@ -114,6 +143,156 @@ void test_slew_limiter_ramps_up_and_brakes_faster() {
 void test_clamp_unit_turns_nan_into_zero() {
   TEST_ASSERT_EQUAL_FLOAT(0.0f, clampUnit(std::nanf("")));
   TEST_ASSERT_EQUAL_FLOAT(-1.0f, clampUnit(-5.0f));
+}
+
+// ─── GamepadMapper ──────────────────────────────────────────────────────────
+
+void test_mapper_drives_with_gear_speed_limit() {
+  RecordingSink sink;
+  GamepadMapper mapper(sink, CommandSource::Web, kMapping);
+  GamepadState state;
+  state.leftY = 1.0f;
+
+  mapper.update(state);
+
+  TEST_ASSERT_EQUAL(1, sink.count);
+  TEST_ASSERT_EQUAL(static_cast<int>(CommandType::Drive), static_cast<int>(sink.last().type));
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 0.7f, sink.last().tracks.left);
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 0.7f, sink.last().tracks.right);
+}
+
+void test_mapper_ignores_stick_noise_in_deadzone() {
+  RecordingSink sink;
+  GamepadMapper mapper(sink, CommandSource::Web, kMapping);
+  GamepadState state;
+  state.leftY = 0.05f;
+  state.rightX = -0.08f;
+
+  mapper.update(state);
+
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, sink.last().tracks.left);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, sink.last().tracks.right);
+}
+
+void test_mapper_fires_once_per_press_of_cross_or_r2() {
+  RecordingSink sink;
+  GamepadMapper mapper(sink, CommandSource::Web, kMapping);
+  GamepadState cross;
+  cross.cross = true;
+  GamepadState trigger;
+  trigger.r2 = 0.8f;
+
+  mapper.update(cross);
+  mapper.update(cross);  // holding the button is not a new shot
+  mapper.update(trigger);
+
+  TEST_ASSERT_EQUAL(2, sink.countOf(CommandType::Fire));
+}
+
+void test_mapper_maps_mode_buttons() {
+  RecordingSink sink;
+  GamepadMapper mapper(sink, CommandSource::Web, kMapping);
+  GamepadState state;
+  state.circle = true;
+  state.options = true;
+
+  mapper.update(state);
+
+  TEST_ASSERT_EQUAL(1, sink.countOf(CommandType::ToggleEmergencyStop));
+  TEST_ASSERT_EQUAL(1, sink.countOf(CommandType::ToggleDemo));
+}
+
+void test_mapper_shifts_gears_within_limits() {
+  RecordingSink sink;
+  GamepadMapper mapper(sink, CommandSource::Web, kMapping);
+  GamepadState released;
+  GamepadState r1;
+  r1.r1 = true;
+  GamepadState l1;
+  l1.l1 = true;
+
+  for (int i = 0; i < 3; ++i) {  // three shifts up — never past the top gear
+    mapper.update(r1);
+    mapper.update(released);
+  }
+  TEST_ASSERT_EQUAL(2, mapper.gear());
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 1.0f, mapper.speedLimit());
+
+  for (int i = 0; i < 3; ++i) {
+    mapper.update(l1);
+    mapper.update(released);
+  }
+  TEST_ASSERT_EQUAL(0, mapper.gear());
+}
+
+void test_mapper_reset_ignores_buttons_held_while_connecting() {
+  RecordingSink sink;
+  GamepadMapper mapper(sink, CommandSource::Web, kMapping);
+  GamepadState held;
+  held.circle = true;
+  held.cross = true;
+
+  mapper.reset(held);
+  mapper.update(held);
+
+  TEST_ASSERT_EQUAL(0, sink.countOf(CommandType::ToggleEmergencyStop));
+  TEST_ASSERT_EQUAL(0, sink.countOf(CommandType::Fire));
+}
+
+void test_mapper_stop_sends_zero_drive() {
+  RecordingSink sink;
+  GamepadMapper mapper(sink, CommandSource::Web, kMapping);
+
+  mapper.stop();
+
+  TEST_ASSERT_EQUAL(static_cast<int>(CommandType::Drive), static_cast<int>(sink.last().type));
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, sink.last().tracks.left);
+}
+
+// ─── RemoteProtocol ─────────────────────────────────────────────────────────
+
+void test_protocol_parses_gamepad_frame() {
+  GamepadState state;
+
+  TEST_ASSERT_TRUE(remote::parseGamepadFrame("S,0.500,-0.250,1.000,5", state));
+
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 0.5f, state.leftY);
+  TEST_ASSERT_FLOAT_WITHIN(kEps, -0.25f, state.rightX);
+  TEST_ASSERT_FLOAT_WITHIN(kEps, 1.0f, state.r2);
+  TEST_ASSERT_TRUE(state.cross);     // bit 0
+  TEST_ASSERT_FALSE(state.circle);   // bit 1
+  TEST_ASSERT_TRUE(state.options);   // bit 2
+}
+
+void test_protocol_clamps_out_of_range_values() {
+  GamepadState state;
+
+  TEST_ASSERT_TRUE(remote::parseGamepadFrame("S,2,-3,1.5,0", state));
+
+  TEST_ASSERT_EQUAL_FLOAT(1.0f, state.leftY);
+  TEST_ASSERT_EQUAL_FLOAT(-1.0f, state.rightX);
+  TEST_ASSERT_EQUAL_FLOAT(1.0f, state.r2);
+}
+
+void test_protocol_rejects_malformed_frames() {
+  const char* const malformed[] = {
+      "", "E", "S", "S,1,2", "X,0,0,0,0", "S,a,0,0,0",
+      "S,0,0,0,", "S,0,0,0,-1", "S,nan,0,0,0", "S,inf,0,0,0", "S,0,0,0,1x",
+  };
+  for (const char* frame : malformed) {
+    GamepadState state;
+    state.leftY = 0.3f;
+    TEST_ASSERT_FALSE_MESSAGE(remote::parseGamepadFrame(frame, state), frame);
+    TEST_ASSERT_EQUAL_FLOAT(0.3f, state.leftY);  // a malformed frame changes nothing
+  }
+}
+
+void test_protocol_formats_status_frame() {
+  char buffer[16];
+
+  TEST_ASSERT_EQUAL(10, remote::formatStatusFrame(buffer, sizeof(buffer), TankMode::EmergencyStop, 2));
+  TEST_ASSERT_EQUAL_STRING("T,E-STOP,2", buffer);
+  TEST_ASSERT_EQUAL(0, remote::formatStatusFrame(buffer, 4, TankMode::Manual, 1));
 }
 
 // ─── TankStateMachine ───────────────────────────────────────────────────────
@@ -212,6 +391,17 @@ int runAllTests() {
   RUN_TEST(test_mix_arcade_keeps_turn_ratio_when_saturated);
   RUN_TEST(test_slew_limiter_ramps_up_and_brakes_faster);
   RUN_TEST(test_clamp_unit_turns_nan_into_zero);
+  RUN_TEST(test_mapper_drives_with_gear_speed_limit);
+  RUN_TEST(test_mapper_ignores_stick_noise_in_deadzone);
+  RUN_TEST(test_mapper_fires_once_per_press_of_cross_or_r2);
+  RUN_TEST(test_mapper_maps_mode_buttons);
+  RUN_TEST(test_mapper_shifts_gears_within_limits);
+  RUN_TEST(test_mapper_reset_ignores_buttons_held_while_connecting);
+  RUN_TEST(test_mapper_stop_sends_zero_drive);
+  RUN_TEST(test_protocol_parses_gamepad_frame);
+  RUN_TEST(test_protocol_clamps_out_of_range_values);
+  RUN_TEST(test_protocol_rejects_malformed_frames);
+  RUN_TEST(test_protocol_formats_status_frame);
   RUN_TEST(test_manual_mode_follows_drive_and_fire_commands);
   RUN_TEST(test_emergency_stop_halts_drive_and_locks_cannon);
   RUN_TEST(test_emergency_stop_ignores_drive_and_fire);
