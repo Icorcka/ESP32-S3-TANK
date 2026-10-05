@@ -6,6 +6,8 @@
 #include "config/BoardPins.h"
 #include "config/TankConfig.h"
 #include "drivers/Motor.h"
+#include "feedback/ModeLogger.h"
+#include "feedback/StatusLed.h"
 #include "services/Cannon.h"
 #include "services/DriveSystem.h"
 #include "services/TankController.h"
@@ -23,6 +25,9 @@ Cannon cannon(board::kFirePin, config::kCannon);
 tank::TankStateMachine tankLogic(drive, cannon, config::kDemo);
 TankController controller(tankLogic, config::kController);
 
+ModeLogger modeLogger;
+StatusLed statusLed(board::kStatusLedPin);
+
 [[noreturn]] void halt(const char* component) {
   ESP_LOGE(kTag, "Failed to start: %s. Halting.", component);
   for (;;) {
@@ -38,6 +43,11 @@ extern "C" void app_main() {
 
   leftMotor.begin();
   rightMotor.begin();
+
+  tankLogic.addObserver(modeLogger);
+  if (statusLed.begin()) {
+    tankLogic.addObserver(statusLed);
+  }
 
   if (!drive.start(config::kDriveTask)) {
     halt("drive");
