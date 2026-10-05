@@ -1,0 +1,13 @@
+# ESP-IDF settings for the tank. Anything not listed here uses the default value.
+# PlatformIO generates sdkconfig.esp32s3 from this file. After editing it, delete
+# sdkconfig.esp32s3 so the configuration gets regenerated.
+
+# 1 ms FreeRTOS tick instead of 10 ms — precise timing for the drive loop, debounce and firing
+CONFIG_FREERTOS_HZ=1000
+
+# Larger app partition (1.5 MB): the Wi-Fi stack takes a lot of space.
+# Must match board_build.partitions in platformio.ini
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# 8 MB flash — as in the esp32s3usbotg board definition
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
