@@ -17,7 +17,7 @@ class ICannon {
  public:
   virtual ~ICannon() = default;
 
-  virtual void fire() = 0;и
+  virtual void fire() = 0;
   virtual void setLocked(bool locked) = 0;
 };
 
